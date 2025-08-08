@@ -11,13 +11,28 @@ st.set_page_config(page_title="Subtotal Predictor (LGBM)", page_icon="🧮", lay
 # ===== Load artifacts =====
 @st.cache_resource
 def load_artifacts():
-    model = joblib.load("lgbm_model.pkl")          # predicts subtotal_log
-    scaler = joblib.load("scaler.pkl")
-    feature_order = json.load(open("feature_order.json"))
-    skewed_cols = json.load(open("skewed_cols.json"))
-    return model, scaler, feature_order, skewed_cols
+    import os
 
-model, scaler, feature_order, skewed_cols = load_artifacts()
+    base_dir = os.path.dirname(os.path.abspath(__file__))  # .../deployment
+    def p(name):  # join helper
+        return os.path.join(base_dir, name)
+
+    try:
+        model = joblib.load(p("lgbm_model.pkl"))          # predicts subtotal_log
+        scaler = joblib.load(p("scaler.pkl"))
+        with open(p("feature_order.json"), "r", encoding = "utf-8") as f:
+            feature_order = json.load(f)
+        with open(p("skewed_cols.json"), "r", encoding = "utf-8") as f:
+            skewed_cols = json.load(f)
+        return model, scaler, feature_order, skewed_cols
+    except FileNotFoundError as e:
+        # Biar jelas kalau masih salah path pas di Streamlit Cloud
+        import os
+        here = os.getcwd()
+        listing = "\n".join(os.listdir(base_dir))
+        raise FileNotFoundError(
+            f"{e}\n\ncwd={here}\nassets_dir={base_dir}\nfiles_in_assets_dir:\n{listing}"
+        )
 
 # ===== Helpers =====
 def ensure_columns(df: pd.DataFrame, expected_cols: list[str]) -> pd.DataFrame:
