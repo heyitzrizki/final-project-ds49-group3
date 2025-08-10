@@ -19,21 +19,14 @@ def load_artifacts():
         model = joblib.load(j("lgbm_model.pkl"))
         scaler = joblib.load(j("scaler.pkl"))
 
-        feature_order_json = None
-        try:
-            with open(j("feature_order.json"), "r", encoding="utf-8") as f:
-                tmp = json.load(f)
-                feature_order_json = tmp.get("feature_order") if isinstance(tmp, dict) else tmp
-        except FileNotFoundError:
-            pass
+        # --- feature order: prefer JSON as source of truth ---
+        with open(j("feature_order.json"), "r", encoding="utf-8") as f:
+            tmp = json.load(f)
+            feature_order = tmp.get("feature_order") if isinstance(tmp, dict) else tmp
+        if not isinstance(feature_order, list) or not all(isinstance(x, str) for x in feature_order):
+            raise ValueError("feature_order.json malformed.")
 
-        if hasattr(scaler, "feature_names_in_"):
-            feature_order = list(scaler.feature_names_in_)
-        elif isinstance(feature_order_json, list):
-            feature_order = feature_order_json
-        else:
-            raise ValueError("Could not find feature list in scaler.feature_names_in_ or feature_order.json.")
-
+        # skewed columns (optional)
         try:
             with open(j("skewed_cols.json"), "r", encoding="utf-8") as f:
                 tmp = json.load(f)
@@ -44,25 +37,18 @@ def load_artifacts():
             skewed_cols = []
 
         return model, scaler, feature_order, skewed_cols
-    except FileNotFoundError as e:
-        listing = "\n".join(os.listdir(base_dir))
-        raise FileNotFoundError(f"{e}\n\nassets_dir={base_dir}\nfiles:\n{listing}")
+    except Exception as e:
+        st.error("Failed to load deployment artifacts.")
+        raise
 
-try:
-    model, scaler, feature_order, skewed_cols = load_artifacts()
-except Exception as e:
-    st.error("❌ Failed to load artifacts.")
-    st.exception(e)
-    st.stop()
+model, scaler, feature_order, skewed_cols = load_artifacts()
 
 # ================= Feature grouping =================
 def split_groups(feats: list[str]):
-    """Detect one-hot groups for order_protocol and store_primary_category; others are numeric."""
     order_cols = [c for c in feats if c.startswith("order_protocol_")]
     store_cols = [c for c in feats if c.startswith("store_primary_category_")]
     in_cat = set(order_cols + store_cols)
     numeric = [c for c in feats if c not in in_cat]
-
     order_levels = [c.replace("order_protocol_", "", 1) for c in order_cols]
     store_levels = [c.replace("store_primary_category_", "", 1) for c in store_cols]
     return numeric, order_cols, store_cols, order_levels, store_levels
@@ -87,17 +73,15 @@ def nice_label(raw: str) -> str:
     return LABEL_MAP.get(raw, raw.replace("_", " ").title())
 
 def cat_pretty(val: str) -> str:
-    # '1.0' -> '1', 'fast-food' -> 'Fast Food', keep 'Unknown' as is
+    # '4.0' -> '4'; keep 'Unknown' as is; tidy hyphens/casing
     if re.fullmatch(r"\d+(\.0)?", val):
         return str(int(float(val)))
     return val.replace("-", " ").title()
 
-def sort_levels(levels: list[str]) -> list[str]:
-    """Natural sort: numeric levels ascending first, then text (e.g., Unknown)."""
+def natural_sort(levels: list[str]) -> list[str]:
     nums = [(int(float(x)), x) for x in levels if re.fullmatch(r"\d+(\.0)?", x)]
     txts = [x for x in levels if not re.fullmatch(r"\d+(\.0)?", x)]
-    nums_sorted = [x for _, x in sorted(nums)]
-    return nums_sorted + sorted(txts, key=lambda s: s.lower())
+    return [x for _, x in sorted(nums)] + sorted(txts, key=lambda s: s.lower())
 
 # ================= Inference helpers =================
 def ensure_columns(df: pd.DataFrame, expected_cols: list[str]) -> pd.DataFrame:
@@ -136,55 +120,44 @@ st.markdown(
 
 tab_form, tab_csv = st.tabs(["🧍 Single Input", "📤 Batch CSV"])
 
-# == numeric types for inputs ==
-# ONLY prices & minutes should be floats; item_price_range was int in training
-FLOAT_NUMS = {"min_item_price", "max_item_price", "delivery_time"}
+# numeric types for inputs: only prices & minutes are floats
+FLOAT_NUMS = {"min_item_price", "max_item_price", "delivery_time", "item_price_range"}
 INT_NUMS = [c for c in numeric_features if c not in FLOAT_NUMS]
 
 # ---------- Single Input ----------
 with tab_form:
     st.write("Enter order & delivery details below. Counts are whole numbers; prices and time allow decimals.")
 
-    # empty row (all zeros) with the exact training feature order
+    # one row with exact training columns
     row = pd.DataFrame([[0] * len(feature_order)], columns=feature_order)
 
-    # --- Order & Delivery Details (numeric block) ---
+    # --- Order & Delivery Details ---
     st.subheader("Order & Delivery Details")
     cols = st.columns(3)
 
-    # integers
     for i, col in enumerate(sorted(INT_NUMS)):
         with cols[i % 3]:
             row.at[0, col] = st.number_input(
-                nice_label(col),
-                value=0,
-                step=1,
-                min_value=0,
-                format="%d",
+                nice_label(col), value=0, step=1, min_value=0, format="%d",
                 help="Enter a whole number (no decimals).",
             )
 
-    # floats
     for i, col in enumerate(sorted(FLOAT_NUMS)):
         with cols[(i + len(INT_NUMS)) % 3]:
             row.at[0, col] = st.number_input(
-                nice_label(col),
-                value=0.0,
-                step=0.1,
-                min_value=0.0,
+                nice_label(col), value=0.0, step=0.1, min_value=0.0,
                 help="You can use decimals here.",
             )
 
-    # --- Order Type & Category (categorical block) ---
+    # --- Order Type & Category ---
     st.subheader("Order Type & Category")
 
-    # ----- Order Protocol (show exactly what's in artifacts) -----
+    # Order Protocol — show exactly what's in artifacts (incl. '1')
     if order_cols:
-        levels_sorted = sort_levels(order_levels)
-        pretty_levels = [cat_pretty(x) for x in levels_sorted]
-        opts = ["(none)"] + pretty_levels   # '(none)' keeps all one-hot = 0
-        choice = st.selectbox(nice_label("order_protocol"), opts, index=0)
-
+        levels_sorted = natural_sort(order_levels)          # e.g. ['1.0','2.0',...,'Unknown']
+        pretty_levels = [cat_pretty(x) for x in levels_sorted]  # e.g. ['1','2',...,'Unknown']
+        opts = ["(none)"] + pretty_levels                   # (none) keeps all zeros
+        choice = st.selectbox(nice_label("order_protocol"), opts)
         row.loc[:, order_cols] = 0
         if choice != "(none)":
             raw_suffix = levels_sorted[pretty_levels.index(choice)]
@@ -192,9 +165,9 @@ with tab_form:
             if target_col in row.columns:
                 row.at[0, target_col] = 1
 
-    # ----- Store Primary Category -----
+    # Store Primary Category
     if store_cols:
-        levels_sorted = sort_levels(store_levels)
+        levels_sorted = natural_sort(store_levels)
         pretty_levels = [cat_pretty(x) for x in levels_sorted]
         opts = ["(none)"] + pretty_levels
         choice = st.selectbox(nice_label("store_primary_category"), opts)
