@@ -69,7 +69,7 @@ def split_groups(feats: list[str]):
 
 numeric_features, order_cols, store_cols, order_levels, store_levels = split_groups(feature_order)
 
-# Friendly labels for UI
+# -------- pretty helpers --------
 LABEL_MAP = {
     "total_items": "Total Items",
     "num_distinct_items": "Distinct Items",
@@ -88,11 +88,18 @@ def nice_label(raw: str) -> str:
 
 def cat_pretty(val: str) -> str:
     # Keep 'Unknown' as is; convert '4.0' -> '4'; tidy hyphens
-    if re.fullmatch(r"\d+\.0", val):
-        return val.split(".")[0]
+    if re.fullmatch(r"\d+(\.0)?", val):
+        return str(int(float(val)))
     return val.replace("-", " ").title()
 
-# ================= Helpers =================
+def sort_levels(levels: list[str]) -> list[str]:
+    """Natural sort: numeric levels ascending first, then text (e.g., Unknown)."""
+    nums = [(int(float(x)), x) for x in levels if re.fullmatch(r"\d+(\.0)?", x)]
+    txts = [x for x in levels if not re.fullmatch(r"\d+(\.0)?", x)]
+    nums_sorted = [x for _, x in sorted(nums)]
+    return nums_sorted + sorted(txts, key=lambda s: s.lower())
+
+# ================= Inference helpers =================
 def ensure_columns(df: pd.DataFrame, expected_cols: list[str]) -> pd.DataFrame:
     df = df.copy()
     for c in expected_cols:
@@ -129,14 +136,9 @@ st.markdown(
 
 tab_form, tab_csv = st.tabs(["🧍 Single Input", "📤 Batch CSV"])
 
-# == which numeric features should be floats vs integers ==
-# per your requirement: ONLY prices and minutes are floats
-FLOAT_NUMS = {
-    "min_item_price",
-    "max_item_price",
-    "delivery_time",
-    "item_price_range",
-}
+# == numeric types for inputs ==
+# Only prices and minutes are floats
+FLOAT_NUMS = {"min_item_price", "max_item_price", "delivery_time", "item_price_range"}
 INT_NUMS = [c for c in numeric_features if c not in FLOAT_NUMS]
 
 # ---------- Single Input ----------
@@ -151,7 +153,7 @@ with tab_form:
     cols = st.columns(3)
 
     # integer inputs
-    for i, col in enumerate(INT_NUMS):
+    for i, col in enumerate(sorted(INT_NUMS)):
         with cols[i % 3]:
             row.at[0, col] = st.number_input(
                 nice_label(col),
@@ -163,7 +165,7 @@ with tab_form:
             )
 
     # float inputs (prices & minutes)
-    for i, col in enumerate(sorted(FLOAT_NUMS)):  # stable order
+    for i, col in enumerate(sorted(FLOAT_NUMS)):
         with cols[(i + len(INT_NUMS)) % 3]:
             row.at[0, col] = st.number_input(
                 nice_label(col),
@@ -176,24 +178,42 @@ with tab_form:
     # --- Order Type & Category (categorical block) ---
     st.subheader("Order Type & Category")
 
-    # Order Protocol
+    # ----- Order Protocol (handles dropped-first baseline) -----
     if order_cols:
-        opts = ["(none)"] + [cat_pretty(x) for x in order_levels]
-        choice = st.selectbox(nice_label("order_protocol"), opts)
+        levels_sorted = sort_levels(order_levels)
+        pretty_levels = [cat_pretty(x) for x in levels_sorted]
+
+        # Detect baseline (e.g., "1") missing from one-hots and add a reference option
+        numeric_levels = [int(float(x)) for x in levels_sorted if re.fullmatch(r"\d+(\.0)?", x)]
+        has_one = any(x in ("1", "1.0") for x in levels_sorted)
+        add_baseline = not has_one or (numeric_levels and min(numeric_levels) > 1)
+        baseline_label = "Reference (all zeros)"
+        if numeric_levels and min(numeric_levels) > 1:
+            baseline_label = f"{min(numeric_levels) - 1} (reference)"
+
+        opts = ([baseline_label] if add_baseline else []) + pretty_levels
+        choice = st.selectbox(nice_label("order_protocol"), opts, index=0)
+
+        # Zero out all order_protocol_* columns first
         row.loc[:, order_cols] = 0
-        if choice != "(none)":
-            raw_suffix = [s for s in order_levels if cat_pretty(s) == choice][0]
+
+        # If a real level chosen, activate its one-hot column
+        if choice in pretty_levels:
+            raw_suffix = levels_sorted[pretty_levels.index(choice)]
             target_col = f"order_protocol_{raw_suffix}"
             if target_col in row.columns:
                 row.at[0, target_col] = 1
+        # else baseline: leave all zeros => correct encoding for the dropped reference
 
-    # Store Primary Category
+    # ----- Store Primary Category -----
     if store_cols:
-        opts = ["(none)"] + [cat_pretty(x) for x in store_levels]
+        levels_sorted = sort_levels(store_levels)
+        pretty_levels = [cat_pretty(x) for x in levels_sorted]
+        opts = ["(none)"] + pretty_levels  # none -> keep all zeros
         choice = st.selectbox(nice_label("store_primary_category"), opts)
         row.loc[:, store_cols] = 0
         if choice != "(none)":
-            raw_suffix = [s for s in store_levels if cat_pretty(s) == choice][0]
+            raw_suffix = levels_sorted[pretty_levels.index(choice)]
             target_col = f"store_primary_category_{raw_suffix}"
             if target_col in row.columns:
                 row.at[0, target_col] = 1
