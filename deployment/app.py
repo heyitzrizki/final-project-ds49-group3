@@ -19,7 +19,6 @@ def load_artifacts():
         model = joblib.load(j("lgbm_model.pkl"))
         scaler = joblib.load(j("scaler.pkl"))
 
-        # Prefer the column order stored inside the scaler (most reliable)
         feature_order_json = None
         try:
             with open(j("feature_order.json"), "r", encoding="utf-8") as f:
@@ -35,9 +34,12 @@ def load_artifacts():
         else:
             raise ValueError("Could not find feature list in scaler.feature_names_in_ or feature_order.json.")
 
-        with open(j("skewed_cols.json"), "r", encoding="utf-8") as f:
-            tmp = json.load(f)
-            skewed_cols = tmp.get("skewed_cols") if isinstance(tmp, dict) else tmp
+        try:
+            with open(j("skewed_cols.json"), "r", encoding="utf-8") as f:
+                tmp = json.load(f)
+                skewed_cols = tmp.get("skewed_cols") if isinstance(tmp, dict) else tmp
+        except FileNotFoundError:
+            skewed_cols = []
         if not isinstance(skewed_cols, list):
             skewed_cols = []
 
@@ -81,7 +83,6 @@ LABEL_MAP = {
     "order_protocol": "Order Protocol",
     "store_primary_category": "Store Primary Category",
 }
-
 def nice_label(raw: str) -> str:
     return LABEL_MAP.get(raw, raw.replace("_", " ").title())
 
@@ -101,12 +102,9 @@ def ensure_columns(df: pd.DataFrame, expected_cols: list[str]) -> pd.DataFrame:
 
 def preprocess(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
-
-    # log1p for skewed numeric columns if present
     for c in skewed_cols:
         if c in df.columns:
             df[c] = np.log1p(df[c].astype(float))
-
     df = ensure_columns(df, feature_order)
     Xs = scaler.transform(df)
     return pd.DataFrame(Xs, columns=feature_order, index=df.index)
@@ -131,22 +129,52 @@ st.markdown(
 
 tab_form, tab_csv = st.tabs(["🧍 Single Input", "📤 Batch CSV"])
 
+# == which numeric features should be floats vs integers ==
+# per your requirement: ONLY prices and minutes are floats
+FLOAT_NUMS = {
+    "min_item_price",
+    "max_item_price",
+    "delivery_time",
+    "item_price_range",
+}
+INT_NUMS = [c for c in numeric_features if c not in FLOAT_NUMS]
+
 # ---------- Single Input ----------
 with tab_form:
-    st.write("Fill in the form below. Numeric fields accept numbers; categorical fields are single-choice.")
+    st.write("Enter order & delivery details below. Counts are whole numbers; prices and time allow decimals.")
 
     # empty row (all zeros) with the exact training feature order
     row = pd.DataFrame([[0] * len(feature_order)], columns=feature_order)
 
-    # --- Numeric inputs ---
-    st.subheader("Numeric Features")
+    # --- Order & Delivery Details (numeric block) ---
+    st.subheader("Order & Delivery Details")
     cols = st.columns(3)
-    for i, col in enumerate(numeric_features):
-        with cols[i % 3]:
-            row.at[0, col] = st.number_input(nice_label(col), value=0.0, step=1.0)
 
-    # --- Categorical inputs ---
-    st.subheader("Categorical Features")
+    # integer inputs
+    for i, col in enumerate(INT_NUMS):
+        with cols[i % 3]:
+            row.at[0, col] = st.number_input(
+                nice_label(col),
+                value=0,
+                step=1,
+                min_value=0,
+                format="%d",
+                help="Enter a whole number (no decimals).",
+            )
+
+    # float inputs (prices & minutes)
+    for i, col in enumerate(sorted(FLOAT_NUMS)):  # stable order
+        with cols[(i + len(INT_NUMS)) % 3]:
+            row.at[0, col] = st.number_input(
+                nice_label(col),
+                value=0.0,
+                step=0.1,
+                min_value=0.0,
+                help="You can use decimals here.",
+            )
+
+    # --- Order Type & Category (categorical block) ---
+    st.subheader("Order Type & Category")
 
     # Order Protocol
     if order_cols:
@@ -185,7 +213,7 @@ with tab_form:
 
 # ---------- Batch CSV ----------
 with tab_csv:
-    st.caption("Upload a CSV containing features only (column names must match training artifacts). Missing columns will be filled with 0.")
+    st.caption("Upload a CSV that contains features only (column names must match the training artifacts). Missing columns will be filled with 0.")
     f = st.file_uploader("Upload CSV (features only)", type=["csv"])
     if f and st.button("Predict (CSV)"):
         try:
