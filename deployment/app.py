@@ -147,7 +147,6 @@ with tab_form:
     cols = st.columns(3)
 
     # numeric types for inputs: only prices & minutes are floats
-    # CHANGED: remove 'item_price_range' from float inputs
     FLOAT_NUMS = {"min_item_price", "max_item_price", "delivery_time"}  # no 'item_price_range'
     INT_NUMS = [c for c in numeric_features if c not in FLOAT_NUMS and c != "item_price_range"]
 
@@ -167,7 +166,7 @@ with tab_form:
                 help="You can use decimals here.",
             )
 
-    # ADDED: auto compute item_price_range = max - min (clamped at 0)
+    # auto compute item_price_range = max - min (clamped at 0)
     max_price = float(row.at[0, "max_item_price"])
     min_price = float(row.at[0, "min_item_price"])
     auto_range = max(0.0, max_price - min_price)
