@@ -1,5 +1,5 @@
 # Final Project DS49 – Group 3
-Regression project to estimate delivery time using the Porter Dataset.
+This project aims to predict the Subtotal from the Porter Delivery Time Estimation dataset using an end-to-end machine learning pipeline, covering EDA, preprocessing, model training, evaluation, and deployment with Streamlit.
 
 ## Members:
 - Anwar Syaifullah Rizki
