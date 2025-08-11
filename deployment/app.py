@@ -135,6 +135,23 @@ with tab_form:
     st.subheader("Order & Delivery Details")
     cols = st.columns(3)
 
+    # ---------- Single Input ----------
+with tab_form:
+    st.write("Enter order & delivery details below. Counts are whole numbers; prices and time allow decimals.")
+
+    # one row with exact training columns
+    row = pd.DataFrame([[0] * len(feature_order)], columns=feature_order)
+
+    # --- Order & Delivery Details ---
+    st.subheader("Order & Delivery Details")
+    cols = st.columns(3)
+
+    # numeric types for inputs: only prices & minutes are floats
+    # CHANGED: remove 'item_price_range' from float inputs
+    FLOAT_NUMS = {"min_item_price", "max_item_price", "delivery_time"}  # no 'item_price_range'
+    INT_NUMS = [c for c in numeric_features if c not in FLOAT_NUMS and c != "item_price_range"]
+
+    # integers
     for i, col in enumerate(sorted(INT_NUMS)):
         with cols[i % 3]:
             row.at[0, col] = st.number_input(
@@ -142,12 +159,27 @@ with tab_form:
                 help="Enter a whole number (no decimals).",
             )
 
+    # floats (min/max price & delivery_time)
     for i, col in enumerate(sorted(FLOAT_NUMS)):
         with cols[(i + len(INT_NUMS)) % 3]:
             row.at[0, col] = st.number_input(
                 nice_label(col), value=0.0, step=0.1, min_value=0.0,
                 help="You can use decimals here.",
             )
+
+    # ADDED: auto compute item_price_range = max - min (clamped at 0)
+    max_price = float(row.at[0, "max_item_price"])
+    min_price = float(row.at[0, "min_item_price"])
+    auto_range = max(0.0, max_price - min_price)
+    row.at[0, "item_price_range"] = auto_range
+    with cols[2]:
+        st.number_input(
+            nice_label("item_price_range") + " (auto)",
+            value=float(auto_range), step=0.1, min_value=0.0,
+            help="Auto = Max Item Price − Min Item Price",
+            disabled=True,  # read-only display
+        )
+
 
     # --- Order Type & Category ---
     st.subheader("Order Type & Category")
