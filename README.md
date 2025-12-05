@@ -6,7 +6,6 @@ This project aims to predict the Subtotal from the Porter Delivery Time Estimati
 - Azizah Salma Ayunisa
 - Nur Azizah Munir
 - Ridlo Dwi Kurniawan
-- Azhar Rasyid
 
 ## Project Structure:
 - EDA and preprocessing
