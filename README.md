@@ -1,4 +1,4 @@
-# Final Project DS49 – Group 3
+# Predicting Delivery Subtotals Using Real-Time Operational Signals - Final Project DS49 – Group 3
 This project aims to predict the Subtotal from the Porter Delivery Time Estimation dataset using an end-to-end machine learning pipeline, covering EDA, preprocessing, model training, evaluation, and deployment with Streamlit.
 
 ## Members:
